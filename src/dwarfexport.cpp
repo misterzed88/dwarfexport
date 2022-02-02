@@ -488,12 +488,16 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
       // Get the bounds of the expression. This fixes issues where the arguments
       // to a multi-line function call were not correctly handled.
       ea_t expr_lowest_addr = addr, expr_highest_addr = addr;
-      if (eamap.count(addr)) {
-        const auto &expr_areaset = bounds.at(eamap.at(addr).at(0));
-
-        // TODO: the area set may not be sorted this way
-        expr_lowest_addr = expr_areaset.getrange(0).start_ea;
-        expr_highest_addr = expr_areaset.lastrange().end_ea - 1;
+      const auto ea_entry = eamap_find(&eamap, addr);
+      if (ea_entry != eamap_end(&eamap)) {
+        const cinsn_t *insn = eamap_second(ea_entry).at(0);
+        const auto bounds_entry = boundaries_find(&bounds, insn);
+        if (bounds_entry != boundaries_end(&bounds)) {
+          const auto &expr_areaset = boundaries_second(bounds_entry);
+          // TODO: the area set may not be sorted this way
+          expr_lowest_addr = expr_areaset.getrange(0).start_ea;
+          expr_highest_addr = expr_areaset.lastrange().end_ea - 1;
+        }
       }
 
       // In some situations, there are multiple lines that have the same
