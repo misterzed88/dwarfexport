@@ -244,10 +244,10 @@ int translate_register_num(int ida_reg_num) {
 
   switch (ph.id) {
   case PLFM_386:
-    return (inf.is_64bit()) ? translate_amd64(reg_num)
+    return (inf_is_64bit()) ? translate_amd64(reg_num)
                             : translate_i386(reg_num);
   case PLFM_ARM:
-    return (inf.is_64bit()) ? -1 : translate_arm(reg_num);
+    return (inf_is_64bit()) ? -1 : translate_arm(reg_num);
   default:
     return -1;
   }
@@ -261,7 +261,7 @@ static bool decompiler_lvar_reg_and_offset(cfuncptr_t cfunc, const lvar_t &var,
   //        useful value: https://forum.hex-rays.com/viewtopic.php?f=4&t=4154
   switch (ph.id) {
   case PLFM_386:
-    if (inf.is_64bit()) {
+    if (inf_is_64bit()) {
       *reg = DW_OP_breg7; // rsp
       *offset = var.location.stkoff();
     } else {
@@ -280,7 +280,7 @@ static bool decompiler_lvar_reg_and_offset(cfuncptr_t cfunc, const lvar_t &var,
     }
     return true;
   case PLFM_ARM:
-    if (inf.is_64bit()) {
+    if (inf_is_64bit()) {
       return false;
     } else {
       *reg = DW_OP_breg13; // SP
@@ -316,7 +316,7 @@ static bool disassembler_lvar_reg_and_offset(func_t *func, member_t *member,
                                              int *reg, int *offset) {
   switch (ph.id) {
   case PLFM_386:
-    if (inf.is_64bit()) {
+    if (inf_is_64bit()) {
       *reg = DW_OP_breg7; // rsp
       *offset = member->soff;
     } else {
@@ -339,7 +339,7 @@ static bool disassembler_lvar_reg_and_offset(func_t *func, member_t *member,
     }
     return true;
   case PLFM_ARM:
-    if (inf.is_64bit()) {
+    if (inf_is_64bit()) {
       return false;
     } else {
       *reg = DW_OP_breg11; // r11
