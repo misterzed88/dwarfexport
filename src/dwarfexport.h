@@ -5,7 +5,7 @@
 #include <fstream>
 #include <hexrays.hpp>
 #include <iostream>
-#include <libdwarf/libdwarf.h>
+#include <libdwarf.h>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -56,7 +56,8 @@ struct Options {
     USE_DECOMPILER = 1 << 0,
     ONLY_DECOMPILE_NAMED_FUNCS = 1 << 1,
     ATTACH_DEBUG_INFO = 1 << 2,
-    VERBOSE = 1 << 3,
+    PERMISSIVE_ELF_LAYOUT = 1 << 3,
+    VERBOSE = 1 << 4,
   };
 
   char filepath[QMAXPATH];
@@ -69,6 +70,7 @@ struct Options {
   bool only_decompile_named_funcs() const {
     return export_options & ONLY_DECOMPILE_NAMED_FUNCS;
   }
+  bool permissive_elf_layout() const { return export_options & PERMISSIVE_ELF_LAYOUT; }
   bool verbose() const { return export_options & VERBOSE; }
 
   std::string c_filename() const { return filename + std::string(".c"); }
