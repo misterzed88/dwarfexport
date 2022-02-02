@@ -335,7 +335,7 @@ static Dwarf_P_Die add_variable(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
                           dwarf_errmsg(err));
       }
     } else {
-      dwarfexport_log("Unable to translate register #", reg_num);
+      dwarfexport_log("Unable to translate register #", var.location.reg1());
     }
   }
 

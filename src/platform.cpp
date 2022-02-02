@@ -236,6 +236,26 @@ static int translate_arm(int ida_reg_num) {
   }
 }
 
+static int translate_arm64(int ida_reg_num) {
+  enum ARM64 {
+    X0 = 0,
+    V0 = 64
+  };
+
+  if (ida_reg_num  < 32) {
+    // 64-bit registers x0-x30
+    return X0 + ida_reg_num;
+  } else if (ida_reg_num >= 35 && ida_reg_num < 41) {
+    // 128-bit pseudo registers t1-t3, map to V which may work sometimes
+    return V0 + (ida_reg_num - 35)/2;
+  } else if (ida_reg_num >= 41 && ida_reg_num < 105) {
+    // 128-bit registers q0-q31, map to V
+    return V0 + (ida_reg_num - 41)/2;
+  } else {
+    return -1;
+  }
+}
+
 int translate_register_num(int ida_reg_num) {
   auto reg_num = (ida_reg_num / 8) - 1;
   if (reg_num == -1) {
@@ -247,7 +267,8 @@ int translate_register_num(int ida_reg_num) {
     return (inf_is_64bit()) ? translate_amd64(reg_num)
                             : translate_i386(reg_num);
   case PLFM_ARM:
-    return (inf_is_64bit()) ? -1 : translate_arm(reg_num);
+    return (inf_is_64bit()) ? translate_arm64(reg_num)
+                            : translate_arm(reg_num);
   default:
     return -1;
   }
@@ -280,12 +301,9 @@ static bool decompiler_lvar_reg_and_offset(cfuncptr_t cfunc, const lvar_t &var,
     }
     return true;
   case PLFM_ARM:
-    if (inf_is_64bit()) {
-      return false;
-    } else {
-      *reg = DW_OP_breg13; // SP
-      *offset = var.location.stkoff();
-    }
+    *reg = inf_is_64bit() ? DW_OP_breg31 : DW_OP_breg13;  // sp
+    *offset = var.location.stkoff();
+    return true;
   default:
     return false;
   }
@@ -340,7 +358,8 @@ static bool disassembler_lvar_reg_and_offset(func_t *func, member_t *member,
     return true;
   case PLFM_ARM:
     if (inf_is_64bit()) {
-      return false;
+      *reg = DW_OP_breg31; // sp
+      *offset = member->soff;
     } else {
       *reg = DW_OP_breg11; // r11
 
