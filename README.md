@@ -17,11 +17,10 @@ the IDA debugger.
 Usage
 -----
 
-Pre-compiled copies of `dwarfexport` are available in the `bin` folder of this
-project. Just add these files to your IDA `plugins` folder (plx and plx64 for linux,
-plw and p64 for windows) and you will have a new option
-"Edit->Plugins->Export Dwarf Debug Info". Click this and select a folder for the
-output.
+First you must build `dwarfexport` to make the plugin available in the `bin` folder
+of this project. Just add this file to your IDA `plugins` folder and you will have a
+new option "Edit->Plugins->Export Dwarf Debug Info". Click this and select a folder
+for the output.
 
 The plugin will generate two files in the output directory. One will be a `.c` file
 with the decompiled functions from the Hexrays decompiler. The other is a `.dbg`
