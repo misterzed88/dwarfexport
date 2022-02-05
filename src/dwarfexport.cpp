@@ -494,9 +494,16 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
         const auto bounds_entry = boundaries_find(&bounds, insn);
         if (bounds_entry != boundaries_end(&bounds)) {
           const auto &expr_areaset = boundaries_second(bounds_entry);
-          // TODO: the area set may not be sorted this way
-          expr_lowest_addr = expr_areaset.getrange(0).start_ea;
-          expr_highest_addr = expr_areaset.lastrange().end_ea - 1;
+          // Find lowest- and highest address in area set, filtering out stale
+          // values outside of function bounds.
+          for (int i = 0; i < expr_areaset.nranges(); i++) {
+            const auto &range = expr_areaset.getrange(i);
+            if (func->contains(range)) {
+              ea_t end_addr = qmax(range.start_ea, range.end_ea-1);
+              expr_lowest_addr = qmin(expr_lowest_addr, range.start_ea);
+              expr_highest_addr = qmax(expr_highest_addr, end_addr);
+            }
+          }
         }
       }
 
