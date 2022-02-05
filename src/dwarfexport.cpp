@@ -730,6 +730,7 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
   int linecount = 1;
   type_record_t record;
   auto seg_qty = get_segm_qty();
+  ea_t highest_ea = 0;
   for (std::size_t segn = 0; segn < seg_qty; ++segn) {
     auto seg = getnseg(segn);
     if (seg == nullptr) {
@@ -768,6 +769,13 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
 
       add_function(info, options, cu, f, sourcefile, linecount, file_index,
                    record);
+      highest_ea = qmax(highest_ea, f->end_ea);
+    }
+  }
+
+  if (has_decompiler && options.use_decompiler() && highest_ea) {
+    if (dwarf_lne_end_sequence(dbg, highest_ea, &err) != DW_DLV_OK) {
+        dwarfexport_error("dwarf_lne_end_sequence failed: ", dwarf_errmsg(err));
     }
   }
 
