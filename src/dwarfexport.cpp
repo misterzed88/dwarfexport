@@ -755,7 +755,7 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
     }
 
     for (; f != nullptr; f = get_next_func(f->start_ea)) {
-      if (f->start_ea > seg->end_ea) {
+      if (f->start_ea >= seg->end_ea) {
         break;
       }
 
