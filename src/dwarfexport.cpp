@@ -426,7 +426,7 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
   auto err = info->err;
 
   hexrays_failure_t hf;
-  cfuncptr_t cfunc = decompile(func, &hf);
+  cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT | DECOMP_NO_XREFS);
 
   if (cfunc == nullptr) {
     dwarfexport_log("Failed to decompile function at ", func->start_ea);
@@ -728,6 +728,7 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
   }
 
   int linecount = 1;
+  int progress = 0;
   type_record_t record;
   auto seg_qty = get_segm_qty();
   ea_t highest_ea = 0;
@@ -770,6 +771,14 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
       add_function(info, options, cu, f, sourcefile, linecount, file_index,
                    record);
       highest_ea = qmax(highest_ea, f->end_ea);
+      
+      if (linecount > progress) {
+        progress += 1000;
+        if (user_cancelled()) {
+            return;
+        }
+        replace_wait_box("Running DWARF export... Line %d\n", linecount);
+      }
     }
   }
 
@@ -801,6 +810,8 @@ plugmod_t * idaapi init(void) {
 }
 
 bool idaapi run(size_t) {
+  bool wait_box_shown = false;
+  bool ret = true;
   try {
     auto default_options =
         (has_decompiler) ? Options::ATTACH_DEBUG_INFO | Options::USE_DECOMPILER
@@ -847,6 +858,9 @@ bool idaapi run(size_t) {
         sourcefile = std::ofstream(options.c_filename());
       }
 
+      show_wait_box("Running DWARF export...\n");
+      wait_box_shown = true;
+
       dwarfexport_log("Setting up DWARF object");
       auto info = generate_dwarf_object(options);
 
@@ -857,16 +871,21 @@ bool idaapi run(size_t) {
       write_dwarf_file(info, options);
 
       dwarfexport_log("All done");
+      msg("dwarfexport: Done\n");
     }
   } catch (const std::exception &e) {
     std::string msg = "A dwarfexport error occurred: " + std::string(e.what());
     warning(msg.c_str());
-    return false;
+    ret = false;
   } catch (...) {
     warning("A dwarfexport error occurred");
-    return false;
+    ret = false;
   }
-  return true;
+  
+  if (wait_box_shown)
+    hide_wait_box();
+    
+  return ret;
 }
 
 plugin_t PLUGIN = {
