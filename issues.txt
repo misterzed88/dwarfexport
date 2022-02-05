@@ -1,0 +1,18 @@
+Known issues:
+1. Save location is not used when "Attach Debug Info" is checked. In this case output files are
+always put in the same directory as the loaded IDA database.
+
+2. When "Attach Debug Info" is used with a file which already has DWARF info present, the output
+file is written with merged- and corrupted DWARF info.
+
+3. The tool generates incorrect DWARF addresses when the IDA file has been relocated (typically by
+the IDA debugger). The DWARF addresses become inconsistent with the ELF section addresses. This
+leads to LLDB rejecting function name lookups, since it can not verify that an address is present
+inside an executable section. See SymbolFileDWARF::ResolveFunction in the LLDB source code.
+
+4. Functions manually named in IDA with "::" qualifiers can not be looked up in LLDB. This is due
+to inconsistent names stored in DWARF for this special case. For example, the name "Class::Method"
+is stored with DW_AT_name "Class__Method" and DW_AT_linkage_name "Class::Method". LLDB lookup
+fails for both names. The first actually finds the symbol internally but thereafter discards it
+due to a requirement that the name is a substring of the linkage name. See the source code for
+Module::LookupInfo::LookupInfo and Module::LookupInfo::Prune in LLDB.
