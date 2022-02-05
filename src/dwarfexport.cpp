@@ -135,7 +135,7 @@ static Dwarf_P_Die add_array_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
   }
 
   auto elems = type.get_array_nelems();
-  if (elems != -1) {
+  if (elems > 0) {
     elems -= 1;
 
     dwarfexport_log("  Number of elements = ", elems);
