@@ -715,16 +715,16 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
 
   Dwarf_Unsigned file_index = 0;
   if (options.use_decompiler()) {
-    if (dwarf_add_AT_name(cu, &options.c_filename()[0], &err) == nullptr) {
+    if (dwarf_add_AT_name(cu, (char*) options.c_filename().c_str(), &err) == nullptr) {
       dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
     }
 
     auto dir_index =
-        dwarf_add_directory_decl(dbg, &options.dwarf_source_path[0], &err);
-    file_index = dwarf_add_file_decl(dbg, &options.c_filename()[0], dir_index,
+        dwarf_add_directory_decl(dbg, options.outdir, &err);
+    file_index = dwarf_add_file_decl(dbg, (char*) options.c_filename().c_str(), dir_index,
                                      0, 0, &err);
 
-    dwarf_add_AT_comp_dir(cu, &options.dwarf_source_path[0], &err);
+    dwarf_add_AT_comp_dir(cu, options.outdir, &err);
   }
 
   int linecount = 1;
@@ -816,15 +816,10 @@ bool idaapi run(size_t) {
     auto default_options =
         (has_decompiler) ? Options::ATTACH_DEBUG_INFO | Options::USE_DECOMPILER
                          : Options::ATTACH_DEBUG_INFO;
-    Options options(".", default_options);
+    Options options(default_options);
 
-    get_input_file_path(options.filepath, QMAXPATH);
+    qgetcwd(options.outdir, QMAXPATH);
     get_root_filename(options.filename, QMAXPATH);
-
-    char *filepath_end = strrchr(options.filepath, PATH_SEP);
-    if (filepath_end != nullptr) {
-      *(filepath_end + 1) = '\0';
-    }
 
     const char *dialog = "STARTITEM 0\n"
                          "Dwarf Export\n\n"
@@ -836,8 +831,13 @@ bool idaapi run(size_t) {
                          "<Permissive ELF Layout:C>\n"
                          "<Verbose:C>>\n";
 
-    if (ask_form(dialog, options.filepath, &options.export_options) ==
+    if (ask_form(dialog, options.outdir, &options.export_options) ==
         1) {
+
+      size_t dirlen = strlen(options.outdir);
+      if (dirlen && options.outdir[dirlen-1] == PATH_SEP) {
+        options.outdir[dirlen-1] = '\0';
+      }
 
       if (options.verbose()) {
         logger = std::ofstream("dwarfexport.log");
@@ -853,9 +853,9 @@ bool idaapi run(size_t) {
 
       std::ofstream sourcefile;
       if (options.use_decompiler()) {
-        dwarfexport_log("Using decompiler with exported source filename: ",
-                        options.c_filename());
-        sourcefile = std::ofstream(options.c_filename());
+        dwarfexport_log("Using decompiler with exported source file path: ",
+                        options.c_filepath());
+        sourcefile = std::ofstream(options.c_filepath());
       }
 
       show_wait_box("Running DWARF export...\n");

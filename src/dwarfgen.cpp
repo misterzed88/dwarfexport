@@ -277,6 +277,7 @@ static void log_elf(Elf *elf) {
 }
 
 static void generate_copy_with_dbg_info(std::shared_ptr<DwarfGenInfo> info,
+                                        const std::string &outdir,
                                         const std::string &src,
                                         const std::string &dst) {
   int fd_in = -1, fd_out = -1;
@@ -305,7 +306,8 @@ static void generate_copy_with_dbg_info(std::shared_ptr<DwarfGenInfo> info,
   }
 
   /* open output elf */
-  if ((fd_out = open(dst.c_str(), O_WRONLY | O_CREAT | O_BINARY, 0777)) < 0)
+  std::string outpath = outdir + PATH_SEP + dst;
+  if ((fd_out = open(outpath.c_str(), O_WRONLY | O_CREAT | O_BINARY, 0777)) < 0)
     dwarfexport_error("open failed: ", dst);
 
   if ((elf_out = elf_begin(fd_out, ELF_C_WRITE, NULL)) == NULL)
@@ -426,7 +428,7 @@ static void generate_copy_with_dbg_info(std::shared_ptr<DwarfGenInfo> info,
 }
 
 void generate_detached_dbg_info(std::shared_ptr<DwarfGenInfo> info,
-                                const std::string &path) {
+                                const std::string &outdir) {
   auto dbg = info->dbg;
   auto err = info->err;
 
@@ -452,7 +454,7 @@ void generate_detached_dbg_info(std::shared_ptr<DwarfGenInfo> info,
     }
 
     auto section_name = detached_sections.at(section_index).substr(1);
-    std::string fullpath = path + PATH_SEP + section_name;
+    std::string outpath = outdir + PATH_SEP + section_name;
 
     // We're in a different section, so open a new fd
     if (prev_section_index != section_index) {
@@ -461,10 +463,10 @@ void generate_detached_dbg_info(std::shared_ptr<DwarfGenInfo> info,
       }
 
       // strip the leading '.' on the section name
-      fd = open(fullpath.c_str(), O_WRONLY | O_CREAT, 0777);
+      fd = open(outpath.c_str(), O_WRONLY | O_CREAT, 0777);
 
       if (fd < 0) {
-        dwarfexport_error("open failed: ", path);
+        dwarfexport_error("open failed: ", outpath);
       }
       prev_section_index = section_index;
     }
@@ -479,9 +481,9 @@ void generate_detached_dbg_info(std::shared_ptr<DwarfGenInfo> info,
 void write_dwarf_file(std::shared_ptr<DwarfGenInfo> info,
                       const Options &options) {
   if (options.attach_debug_info()) {
-    generate_copy_with_dbg_info(info, options.filename, options.dbg_filename());
+    generate_copy_with_dbg_info(info, options.outdir, options.filename, options.dbg_filename());
   } else {
-    generate_detached_dbg_info(info, options.filepath);
+    generate_detached_dbg_info(info, options.outdir);
   }
   dwarf_producer_finish(info->dbg, 0);
 }

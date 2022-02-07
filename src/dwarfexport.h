@@ -10,6 +10,12 @@
 #include <sstream>
 #include <stdexcept>
 
+#ifdef __NT__
+#define PATH_SEP '\\'
+#else
+#define PATH_SEP '/'
+#endif
+
 [[noreturn]] inline void dwarfexport_error_impl(const std::string &s) {
   throw std::runtime_error(s);
 }
@@ -60,9 +66,8 @@ struct Options {
     VERBOSE = 1 << 4,
   };
 
-  char filepath[QMAXPATH];
+  char outdir[QMAXPATH];
   char filename[QMAXPATH];
-  std::string dwarf_source_path;
   unsigned short export_options;
 
   bool use_decompiler() const { return export_options & USE_DECOMPILER; }
@@ -74,10 +79,10 @@ struct Options {
   bool verbose() const { return export_options & VERBOSE; }
 
   std::string c_filename() const { return filename + std::string(".c"); }
+  std::string c_filepath() const { return std::string(outdir) + PATH_SEP + c_filename(); }
   std::string dbg_filename() const { return filename + std::string(".dbg"); }
 
-  Options(std::string _source_path, unsigned short options)
-      : dwarf_source_path{_source_path}, export_options{options} {}
+  Options(unsigned short options) : export_options{options} {}
 };
 
 std::shared_ptr<DwarfGenInfo> generate_dwarf_object(const Options &options);
@@ -88,12 +93,6 @@ Dwarf_P_Expr decompiler_stack_lvar_location(Dwarf_P_Debug dbg, cfuncptr_t cfunc,
                                             const lvar_t &var);
 Dwarf_P_Expr disassembler_stack_lvar_location(Dwarf_P_Debug dbg, func_t *func,
                                               member_t *member);
-
-#ifdef __NT__
-#define PATH_SEP '\\'
-#else
-#define PATH_SEP '/'
-#endif
 
 /*
   The following strtabdata class is used (heavily) modified from 'dwarfgen',
