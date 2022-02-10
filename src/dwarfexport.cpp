@@ -22,6 +22,19 @@ std::ofstream logger;
 // A mapping of IDA types to dwarf types
 using type_record_t = std::map<tinfo_t, Dwarf_P_Die>;
 
+// Sorted list of address -> line info, where the same address may be mapped to different lines
+struct line_info
+{
+    line_info(int nr, bool statement = true) {
+        this->nr = nr;
+        this->statement = statement;
+    }
+    int nr;
+    bool statement;
+};
+
+using line_info_t = std::multimap<ea_t, line_info>;
+
 /**
  * Add a dwarf type definitions to the compilation unit 'cu' representing
  * the IDA type 'type'. This is implemented for structs, const types,
@@ -468,6 +481,7 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
                                      int &linecount, Dwarf_Unsigned file_index,
                                      Dwarf_Unsigned symbol_index,
                                      type_record_t &record,
+                                     line_info_t &lines,
                                      ea_t previous_line_addr) {
   auto dbg = info->dbg;
   auto err = info->err;
@@ -521,7 +535,7 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
       }
 
       // item.get_ea returns strange values, so use the item_t ea for exprs for now.
-      ea_t addr = item.e->ea;
+      ea_t addr = item.it->ea;
 
       // Select the first valid address, ignoring strange addresses outside of this function.
       if (addr != (ea_t)-1 && addr >= func->start_ea && addr <= func->end_ea) {
@@ -530,11 +544,11 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
     }
 
     // Add line if its address was found and if it does not map to the same address as the
-    // previous line.
+    // previous line. Assume all lines are DWARF statements until we have found a simple way to
+    // differentiate between statements and multi-line expressions.
     if (line_addr && line_addr != previous_line_addr) {
       dwarfexport_log("Mapping line #", linecount, " to address 0x", hex(line_addr));
-      dwarf_lne_set_address(dbg, line_addr, 0, &err);
-      dwarf_add_line_entry(dbg, file_index, line_addr, linecount, 0, true, false, &err);
+      lines.insert({line_addr, line_info(linecount)});
       previous_line_addr = line_addr;
     }
   }
@@ -548,7 +562,7 @@ static Dwarf_P_Die add_function(std::shared_ptr<DwarfGenInfo> info,
                                 Options &options, Dwarf_P_Die cu, func_t *func,
                                 std::ostream &file, int &linecount,
                                 Dwarf_Unsigned file_index,
-                                type_record_t &record) {
+                                type_record_t &record, line_info_t &lines) {
   auto dbg = info->dbg;
   auto err = info->err;
   Dwarf_P_Die die;
@@ -611,11 +625,10 @@ static Dwarf_P_Die add_function(std::shared_ptr<DwarfGenInfo> info,
     dwarf_add_AT_unsigned_const(dbg, die, DW_AT_decl_line, linecount, &err);
 
     // The start of every function should have a line entry
-    dwarf_add_line_entry(dbg, file_index, func->start_ea, linecount, 0, true,
-                         false, &err);
+    lines.insert({func->start_ea, line_info(linecount)});
 
     add_decompiler_func_info(info, cu, die, func, file, linecount, file_index,
-                             0, record, func->start_ea);
+                             0, record, lines, func->start_ea);
   } else {
     add_disassembler_func_info(info, cu, die, func, record);
   }
@@ -733,6 +746,7 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
   int linecount = 1;
   int progress = 0;
   type_record_t record;
+  line_info_t lines;
   auto seg_qty = get_segm_qty();
   ea_t highest_ea = 0;
   for (std::size_t segn = 0; segn < seg_qty; ++segn) {
@@ -771,8 +785,7 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
         break;
       }
 
-      add_function(info, options, cu, f, sourcefile, linecount, file_index,
-                   record);
+      add_function(info, options, cu, f, sourcefile, linecount, file_index, record, lines);
       highest_ea = qmax(highest_ea, f->end_ea);
       
       if (linecount > progress) {
@@ -785,7 +798,16 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
     }
   }
 
-  if (has_decompiler && options.use_decompiler() && highest_ea) {
+  // Insert line number info, in address order. (Must be done separately since libdwarf does not
+  // sort for us.)
+  if (lines.size()) {
+    for (const auto &line: lines) {
+      if (dwarf_add_line_entry(dbg, file_index, line.first, line.second.nr, 0,
+                               line.second.statement, false, &err) != DW_DLV_OK) {
+        dwarfexport_error("dwarf_add_line_entry failed: ", dwarf_errmsg(err));
+      }
+    }
+
     if (dwarf_lne_end_sequence(dbg, highest_ea, &err) != DW_DLV_OK) {
         dwarfexport_error("dwarf_lne_end_sequence failed: ", dwarf_errmsg(err));
     }
