@@ -323,7 +323,7 @@ static Dwarf_P_Die add_variable(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
                           dwarf_errmsg(err));
       }
     }
-  } else if (!var.is_arg_var() && var.location.is_reg1()) {
+  } else if (var.location.is_reg1()) {
     // Try to get the DWARF register number from the IDA register number.
     // For whatever reason, the mapping is different for registers when
     // passing arguments, so we don't do those.
