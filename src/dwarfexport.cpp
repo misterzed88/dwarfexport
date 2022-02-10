@@ -486,7 +486,7 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
     // Add line if its address was found and if it does not map to the same address as the
     // previous line.
     if (line_addr && line_addr != previous_line_addr) {
-      dwarfexport_log("Mapping line #", linecount, " to address ", line_addr);
+      dwarfexport_log("Mapping line #", linecount, " to address 0x", hex(line_addr));
       dwarf_lne_set_address(dbg, line_addr, 0, &err);
       dwarf_add_line_entry(dbg, file_index, line_addr, linecount, 0, true, false, &err);
       previous_line_addr = line_addr;
@@ -630,7 +630,7 @@ void add_global_variables(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
       std::string lname(name.c_str());
       dwarfexport_log("  name = ", lname);
 
-      dwarfexport_log("  location = ", addr);
+      dwarfexport_log("  location = 0x", hex(addr));
 
       auto die =
           dwarf_new_die(dbg, DW_TAG_variable, cu, NULL, NULL, NULL, &err);

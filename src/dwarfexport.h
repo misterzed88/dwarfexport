@@ -33,20 +33,18 @@ inline void dwarfexport_error_impl(const std::string &s, Arg arg,
 
 extern std::ofstream logger;
 
-inline void dwarfexport_log_impl(const std::string &s) {
-  logger << s << std::endl;
+inline void dwarfexport_log_impl() {
+  logger << std::endl;
 }
 
 template <typename Arg, typename... Args>
-inline void dwarfexport_log_impl(const std::string &s, Arg arg, Args... args) {
-  if (logger.is_open()) {
-    std::ostringstream os;
-    os << arg;
-    dwarfexport_log_impl(s + os.str(), args...);
-  }
+inline void dwarfexport_log_impl(Arg arg, Args... args) {
+  logger << arg;
+  dwarfexport_log_impl(args...);
 }
 
-#define dwarfexport_log(...) dwarfexport_log_impl(__VA_ARGS__)
+#define dwarfexport_log(...) if (logger.is_open()) dwarfexport_log_impl(__VA_ARGS__)
+#define hex(addr)            std::hex, (addr), std::dec
 
 enum class Mode { BIT32, BIT64 };
 
