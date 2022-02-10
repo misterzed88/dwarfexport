@@ -14,6 +14,4 @@ fails for both names. The first actually finds the symbol internally but thereaf
 due to a requirement that the name is a substring of the linkage name. See the source code for
 Module::LookupInfo::LookupInfo and Module::LookupInfo::Prune in LLDB.
 
-The generated line number info is very sparse, with a lot of statements skipped.
-
 Many of the generated types and local variables are not usable from LLDB.

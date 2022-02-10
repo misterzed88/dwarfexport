@@ -421,7 +421,8 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
                                      func_t *func, std::ostream &file,
                                      int &linecount, Dwarf_Unsigned file_index,
                                      Dwarf_Unsigned symbol_index,
-                                     type_record_t &record) {
+                                     type_record_t &record,
+                                     ea_t previous_line_addr) {
   auto dbg = info->dbg;
   auto err = info->err;
 
@@ -445,7 +446,6 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
   const auto &sv = cfunc->get_pseudocode();
   const auto &bounds = cfunc->get_boundaries();
   const auto &eamap = cfunc->get_eamap();
-  ea_t previous_line_addr = 0;
   for (std::size_t i = 0; i < sv.size(); ++i, ++linecount) {
     qstring buf;
     qstring line = sv[i].line;
@@ -462,77 +462,34 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
       continue;
     }
 
-    // For each column in the line, try to find a cexpr_t that has an
-    // address inside the function, then emit a dwarf source line info
-    // for that.
-    ea_t lowest_line_addr = 0, highest_line_addr = 0;
-    for (; index < stripped_buf.size(); ++index) {
+    // Each column in the line can map to different addresses. We keep things simple and map the
+    // line to the first valid column address.
+    ea_t line_addr = 0;
+    for (; index < stripped_buf.size() && !line_addr; ++index) {
         if (!cfunc->get_line_item(line.c_str(), index, true, nullptr, &item, nullptr)) {
         continue;
       }
 
-      // item.get_ea returns strange values, so use the item_t ea for exprs
-      // for now
-      if (item.citype != VDI_EXPR || !item.it->is_expr()) {
+      if (item.citype != VDI_EXPR) {
         continue;
       }
 
+      // item.get_ea returns strange values, so use the item_t ea for exprs for now.
       ea_t addr = item.e->ea;
 
-      // The address for this expression is outside of this function,
-      // so something strange is happening. Just ignore it.
-      if (addr == (ea_t)-1 || addr < func->start_ea || addr > func->end_ea) {
-        continue;
-      }
-
-      // Get the bounds of the expression. This fixes issues where the arguments
-      // to a multi-line function call were not correctly handled.
-      ea_t expr_lowest_addr = addr, expr_highest_addr = addr;
-      const auto ea_entry = eamap_find(&eamap, addr);
-      if (ea_entry != eamap_end(&eamap)) {
-        const cinsn_t *insn = eamap_second(ea_entry).at(0);
-        const auto bounds_entry = boundaries_find(&bounds, insn);
-        if (bounds_entry != boundaries_end(&bounds)) {
-          const auto &expr_areaset = boundaries_second(bounds_entry);
-          // Find lowest- and highest address in area set, filtering out stale
-          // values outside of function bounds.
-          for (int i = 0; i < expr_areaset.nranges(); i++) {
-            const auto &range = expr_areaset.getrange(i);
-            if (func->contains(range)) {
-              ea_t end_addr = qmax(range.start_ea, range.end_ea-1);
-              expr_lowest_addr = qmin(expr_lowest_addr, range.start_ea);
-              expr_highest_addr = qmax(expr_highest_addr, end_addr);
-            }
-          }
-        }
-      }
-
-      // In some situations, there are multiple lines that have the same
-      // 'lowest' point. To avoid mapping multiple lines to the same address, we
-      // try to ensure that the address associated with a given line is the
-      // lowest one that is still higher than the highest address of the
-      // previous line.
-      if (!lowest_line_addr || expr_lowest_addr < lowest_line_addr) {
-        if (!previous_line_addr || expr_lowest_addr > previous_line_addr) {
-          lowest_line_addr = expr_lowest_addr;
-        }
-      }
-      if (!highest_line_addr || expr_highest_addr > highest_line_addr) {
-        highest_line_addr = expr_highest_addr;
+      // Select the first valid address, ignoring strange addresses outside of this function.
+      if (addr != (ea_t)-1 && addr >= func->start_ea && addr <= func->end_ea) {
+        line_addr = addr;
       }
     }
 
-    if (!lowest_line_addr && highest_line_addr &&
-        highest_line_addr > previous_line_addr) {
-      lowest_line_addr = previous_line_addr + 1;
-    }
-    if (lowest_line_addr) {
-      dwarfexport_log("Mapping line #", linecount, " to address ",
-                      lowest_line_addr);
-      dwarf_lne_set_address(dbg, lowest_line_addr, 0, &err);
-      dwarf_add_line_entry(dbg, file_index, lowest_line_addr, linecount, index,
-                           true, false, &err);
-      previous_line_addr = highest_line_addr;
+    // Add line if its address was found and if it does not map to the same address as the
+    // previous line.
+    if (line_addr && line_addr != previous_line_addr) {
+      dwarfexport_log("Mapping line #", linecount, " to address ", line_addr);
+      dwarf_lne_set_address(dbg, line_addr, 0, &err);
+      dwarf_add_line_entry(dbg, file_index, line_addr, linecount, 0, true, false, &err);
+      previous_line_addr = line_addr;
     }
   }
 
@@ -612,7 +569,7 @@ static Dwarf_P_Die add_function(std::shared_ptr<DwarfGenInfo> info,
                          false, &err);
 
     add_decompiler_func_info(info, cu, die, func, file, linecount, file_index,
-                             0, record);
+                             0, record, func->start_ea);
   } else {
     add_disassembler_func_info(info, cu, die, func, record);
   }
