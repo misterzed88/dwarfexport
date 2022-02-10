@@ -71,11 +71,6 @@ static Dwarf_P_Die add_struct_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
 
   dwarfexport_log("  Member Count = ", member_count);
 
-  // No use trying to add members for invalid types
-  if (!type.is_correct()) {
-    member_count = -1;
-  }
-
   for (int i = 0; i < member_count; ++i) {
     udt_member_t member;
     member.offset = i;
@@ -223,6 +218,85 @@ static Dwarf_P_Die add_ptr_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
   return die;
 }
 
+static Dwarf_P_Die add_unspecified_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
+                                        const tinfo_t &type, type_record_t &record) {
+  dwarfexport_log("Adding unspecified type");
+
+  Dwarf_P_Die die;
+  Dwarf_Error err = 0;
+
+  die = dwarf_new_die(dbg, DW_TAG_unspecified_type, cu, NULL, NULL, NULL, &err);
+  if (die == NULL) {
+    dwarfexport_error("dwarf_new_die failed: ", dwarf_errmsg(err));
+  }
+
+  // Add type name
+  const char *name = type.dstr();
+  if (name && name[0]) {
+    if (dwarf_add_AT_name(die, (char*) name, &err) == NULL) {
+      dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
+    }
+    dwarfexport_log("  Name = ", name);
+  }
+
+  record[type] = die;
+  return die;
+}
+
+static Dwarf_P_Die add_base_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu, const tinfo_t &type,
+                                 type_record_t &record) {
+  Dwarf_P_Die die;
+  Dwarf_Error err = 0;
+
+  // Add types with unknown- or zero size as unspecified
+  std::size_t size = type.get_size();
+  if (size == BADSIZE || !size) {
+    return add_unspecified_type(dbg, cu, type, record);
+  }
+
+  die = dwarf_new_die(dbg, DW_TAG_base_type, cu, NULL, NULL, NULL, &err);
+  if (die == NULL) {
+    dwarfexport_error("dwarf_new_die failed: ", dwarf_errmsg(err));
+  }
+
+  // Add type name
+  const char *name = type.dstr();
+  if (name && name[0]) {
+    if (dwarf_add_AT_name(die, (char*) name, &err) == NULL) {
+      dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
+    }
+    dwarfexport_log("  Name = ", name);
+  }
+
+  // Add type size
+  if (dwarf_add_AT_unsigned_const(dbg, die, DW_AT_byte_size, size, &err) == NULL) {
+    dwarfexport_error("dwarf_add_AT_unsigned_const failed: ", dwarf_errmsg(err));
+  }
+  dwarfexport_log("  Size = ", size);
+
+  // Add encoding (note: order is important below, specific checks first, since types can overlap)
+  Dwarf_Unsigned enc = 0;
+  if (type.is_char()) {
+    enc = DW_ATE_signed_char;
+  } else if (type.is_uchar()) {
+    enc = DW_ATE_unsigned_char;
+  } else if (type.is_bool()) {
+    enc = DW_ATE_boolean;
+  } else if (type.is_int()) {
+    enc = type.is_signed() ? DW_ATE_signed : DW_ATE_unsigned;
+  }
+
+  if (enc) {
+    if (dwarf_add_AT_unsigned_const(dbg, die, DW_AT_encoding, enc, &err) == NULL) {
+      dwarfexport_error("dwarf_add_AT_unsigned_const failed: ", dwarf_errmsg(err));
+    }
+    dwarfexport_log("  Encoding = ", enc);
+  }
+
+  record[type] = die;
+  return die;
+}
+
 static Dwarf_P_Die get_or_add_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
                                    const tinfo_t &type, type_record_t &record) {
   if (record.find(type) != record.end()) {
@@ -231,56 +305,19 @@ static Dwarf_P_Die get_or_add_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
 
   dwarfexport_log("Adding new type");
 
-  Dwarf_P_Die die;
-  Dwarf_Error err = 0;
-
-  // Log problematic types to ease troubleshooting. This can for example happen when a type name
-  // collides with a function name.
-  if (!type.is_correct()) {
-    dwarfexport_log("Invalid type: ", type.dstr());
-  }
-
-  // special cases for const, ptr, array, and struct
-  if (type.is_const()) {
-    die = add_const_type(dbg, cu, type, record);
-    return die;
+  if (type.is_void() || type.is_unknown() || !type.is_correct()) {
+    return add_unspecified_type(dbg, cu, type, record);
+  } else if (type.is_const()) {
+    return add_const_type(dbg, cu, type, record);
   } else if (type.is_ptr()) {
-    die = add_ptr_type(dbg, cu, type, record);
-    return die;
+    return add_ptr_type(dbg, cu, type, record);
   } else if (type.is_array()) {
-    die = add_array_type(dbg, cu, type, record);
-    return die;
+    return add_array_type(dbg, cu, type, record);
   } else if (type.is_struct()) {
-    die = add_struct_type(dbg, cu, type, record);
-    return die;
+    return add_struct_type(dbg, cu, type, record);
+  } else {
+    return add_base_type(dbg, cu, type, record);
   }
-
-  die = dwarf_new_die(dbg, DW_TAG_base_type, cu, NULL, NULL, NULL, &err);
-
-  if (die == NULL) {
-    dwarfexport_error("dwarf_new_die failed: ", dwarf_errmsg(err));
-  }
-
-  // Add type name
-  qstring name;
-  if (type.get_type_name(&name)) {
-    if (dwarf_add_AT_name(die, (char*) name.c_str(), &err) == NULL) {
-      dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
-    }
-    dwarfexport_log("  Name = ", name.c_str());
-  }
-
-  // Add type size
-  std::size_t size = type.get_size();
-  if (size != BADSIZE) {
-    if (dwarf_add_AT_unsigned_const(dbg, die, DW_AT_byte_size, size, &err) == NULL) {
-      dwarfexport_error("dwarf_add_AT_unsigned_const failed: ", dwarf_errmsg(err));
-    }
-    dwarfexport_log("  Size = ", size);
-  }
-
-  record[type] = die;
-  return die;
 }
 
 /**

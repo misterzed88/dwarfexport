@@ -13,5 +13,3 @@ is stored with DW_AT_name "Class__Method" and DW_AT_linkage_name "Class::Method"
 fails for both names. The first actually finds the symbol internally but thereafter discards it
 due to a requirement that the name is a substring of the linkage name. See the source code for
 Module::LookupInfo::LookupInfo and Module::LookupInfo::Prune in LLDB.
-
-Many of the generated types and local variables are not usable from LLDB.
