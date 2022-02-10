@@ -47,23 +47,22 @@ static Dwarf_P_Die add_struct_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
   record[type] = die;
 
   // Add type name
-  std::string name = type.dstr();
-  if (dwarf_add_AT_name(die, &name[0], &err) == NULL) {
-    dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
+  qstring name;
+  if (type.get_type_name(&name)) {
+    if (dwarf_add_AT_name(die, (char*) name.c_str(), &err) == NULL) {
+      dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
+    }
+    dwarfexport_log("  Name = ", name.c_str());
   }
-
-  dwarfexport_log("  Name = ", name);
 
   // Add type size
   auto size = type.get_size();
-  if (size != BADSIZE &&
-      dwarf_add_AT_unsigned_const(dbg, die, DW_AT_byte_size, size, &err) ==
-          NULL) {
-    dwarfexport_error("dwarf_add_AT_unsigned_const failed: ",
-                      dwarf_errmsg(err));
+  if (size != BADSIZE) {
+    if (dwarf_add_AT_unsigned_const(dbg, die, DW_AT_byte_size, size, &err) == NULL) {
+      dwarfexport_error("dwarf_add_AT_unsigned_const failed: ", dwarf_errmsg(err));
+    }
+    dwarfexport_log("  Size = ", size);
   }
-
-  dwarfexport_log("  Size = ", size);
 
   auto member_count = type.get_udt_nmembers();
   if (member_count == -1) {
@@ -71,6 +70,11 @@ static Dwarf_P_Die add_struct_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
   }
 
   dwarfexport_log("  Member Count = ", member_count);
+
+  // No use trying to add members for invalid types
+  if (!type.is_correct()) {
+    member_count = -1;
+  }
 
   for (int i = 0; i < member_count; ++i) {
     udt_member_t member;
@@ -230,6 +234,12 @@ static Dwarf_P_Die get_or_add_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
   Dwarf_P_Die die;
   Dwarf_Error err = 0;
 
+  // Log problematic types to ease troubleshooting. This can for example happen when a type name
+  // collides with a function name.
+  if (!type.is_correct()) {
+    dwarfexport_log("Invalid type: ", type.dstr());
+  }
+
   // special cases for const, ptr, array, and struct
   if (type.is_const()) {
     die = add_const_type(dbg, cu, type, record);
@@ -252,23 +262,22 @@ static Dwarf_P_Die get_or_add_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
   }
 
   // Add type name
-  std::string name = type.dstr();
-  if (dwarf_add_AT_name(die, &name[0], &err) == NULL) {
-    dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
+  qstring name;
+  if (type.get_type_name(&name)) {
+    if (dwarf_add_AT_name(die, (char*) name.c_str(), &err) == NULL) {
+      dwarfexport_error("dwarf_add_AT_name failed: ", dwarf_errmsg(err));
+    }
+    dwarfexport_log("  Name = ", name.c_str());
   }
-
-  dwarfexport_log("  Name = ", name);
 
   // Add type size
   std::size_t size = type.get_size();
-  if (size != BADSIZE &&
-      dwarf_add_AT_unsigned_const(dbg, die, DW_AT_byte_size, size, &err) ==
-          NULL) {
-    dwarfexport_error("dwarf_add_AT_unsigned_const failed: ",
-                      dwarf_errmsg(err));
+  if (size != BADSIZE) {
+    if (dwarf_add_AT_unsigned_const(dbg, die, DW_AT_byte_size, size, &err) == NULL) {
+      dwarfexport_error("dwarf_add_AT_unsigned_const failed: ", dwarf_errmsg(err));
+    }
+    dwarfexport_log("  Size = ", size);
   }
-
-  dwarfexport_log("  Size = ", size);
 
   record[type] = die;
   return die;
