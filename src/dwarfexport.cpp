@@ -25,12 +25,14 @@ using type_record_t = std::map<tinfo_t, Dwarf_P_Die>;
 // Sorted list of address -> line info, where the same address may be mapped to different lines
 struct line_info
 {
-    line_info(int nr, bool statement = true) {
+    line_info(int nr, bool statement, bool mode16) {
         this->nr = nr;
         this->statement = statement;
+        this->mode16 = mode16;
     }
     int nr;
     bool statement;
+    bool mode16;
 };
 
 using line_info_t = std::multimap<ea_t, line_info>;
@@ -267,6 +269,33 @@ static Dwarf_P_Die add_base_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu, const tinfo_
     return add_unspecified_type(dbg, cu, type, record);
   }
 
+  // Decide encoding (note: order is important below, specific checks first, since types can overlap)
+  Dwarf_Unsigned enc;
+  if (type.is_char()) {
+    enc = DW_ATE_signed_char;
+  } else if (type.is_uchar()) {
+    enc = DW_ATE_unsigned_char;
+  } else if (type.is_bool()) {
+    enc = DW_ATE_boolean;
+  } else if (type.is_int()) {
+    enc = type.is_signed() ? DW_ATE_signed : DW_ATE_unsigned;
+  } else if (type.is_float() || type.is_double()) {
+    enc = DW_ATE_float;
+  } else if (type.is_partial()) {
+    // Partial types are void types with known size, treat as unsigned char/integer
+    if (size == 1) {
+      enc = DW_ATE_unsigned_char;
+    } else if (size == 2 || size == 4 || size == 8) {
+      enc = DW_ATE_unsigned;
+    } else {
+      return add_unspecified_type(dbg, cu, type, record);        
+    }
+  } else {
+    // Unsupported type added as unspecified for now
+    return add_unspecified_type(dbg, cu, type, record);
+  }
+
+  // Create base type entry
   die = dwarf_new_die(dbg, DW_TAG_base_type, cu, NULL, NULL, NULL, &err);
   if (die == NULL) {
     dwarfexport_error("dwarf_new_die failed: ", dwarf_errmsg(err));
@@ -287,24 +316,11 @@ static Dwarf_P_Die add_base_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu, const tinfo_
   }
   dwarfexport_log("  Size = ", size);
 
-  // Add encoding (note: order is important below, specific checks first, since types can overlap)
-  Dwarf_Unsigned enc = 0;
-  if (type.is_char()) {
-    enc = DW_ATE_signed_char;
-  } else if (type.is_uchar()) {
-    enc = DW_ATE_unsigned_char;
-  } else if (type.is_bool()) {
-    enc = DW_ATE_boolean;
-  } else if (type.is_int()) {
-    enc = type.is_signed() ? DW_ATE_signed : DW_ATE_unsigned;
+  // Add encoding
+  if (dwarf_add_AT_unsigned_const(dbg, die, DW_AT_encoding, enc, &err) == NULL) {
+    dwarfexport_error("dwarf_add_AT_unsigned_const failed: ", dwarf_errmsg(err));
   }
-
-  if (enc) {
-    if (dwarf_add_AT_unsigned_const(dbg, die, DW_AT_encoding, enc, &err) == NULL) {
-      dwarfexport_error("dwarf_add_AT_unsigned_const failed: ", dwarf_errmsg(err));
-    }
-    dwarfexport_log("  Encoding = ", enc);
-  }
+  dwarfexport_log("  Encoding = ", enc);
 
   record[type] = die;
   return die;
@@ -328,6 +344,9 @@ static Dwarf_P_Die get_or_add_type(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
     return add_array_type(dbg, cu, type, record);
   } else if (type.is_struct()) {
     return add_struct_type(dbg, cu, type, record);
+  } else if (type.is_union()) {
+    // Unions not yet supported
+    return add_unspecified_type(dbg, cu, type, record);
   } else {
     return add_base_type(dbg, cu, type, record);
   }
@@ -548,7 +567,7 @@ static void add_decompiler_func_info(std::shared_ptr<DwarfGenInfo> info,
     // differentiate between statements and multi-line expressions.
     if (line_addr && line_addr != previous_line_addr) {
       dwarfexport_log("Mapping line #", linecount, " to address 0x", hex(line_addr));
-      lines.insert({line_addr, line_info(linecount)});
+      lines.insert({line_addr, line_info(linecount, true, get_processor_mode16(line_addr))});
       previous_line_addr = line_addr;
     }
   }
@@ -625,7 +644,7 @@ static Dwarf_P_Die add_function(std::shared_ptr<DwarfGenInfo> info,
     dwarf_add_AT_unsigned_const(dbg, die, DW_AT_decl_line, linecount, &err);
 
     // The start of every function should have a line entry
-    lines.insert({func->start_ea, line_info(linecount)});
+    lines.insert({func->start_ea, line_info(linecount, true, get_processor_mode16(func->start_ea))});
 
     add_decompiler_func_info(info, cu, die, func, file, linecount, file_index,
                              0, record, lines, func->start_ea);
@@ -718,8 +737,18 @@ void add_global_variables(Dwarf_P_Debug dbg, Dwarf_P_Die cu,
   }
 }
 
-void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
-                    std::ostream &sourcefile, Options &options) {
+static Dwarf_Unsigned get_line_isa(std::shared_ptr<DwarfGenInfo> info, const line_info &line)
+{
+    // ISA only relevant for ARM32 where we need to select between ARM and THUMB instructions
+    if (info->proc != Proc::ARM || info->mode != Mode::BIT32)
+      return DW_ISA_UNKNOWN;
+
+    return (line.mode16 ? DW_ISA_ARM_thumb : DW_ISA_ARM_arm);
+}
+
+static void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
+                          std::ostream &sourcefile, Options &options,
+                          mode16_addrs_t &mode16_addrs) {
   auto dbg = info->dbg;
   auto err = info->err;
   Dwarf_P_Die cu;
@@ -799,12 +828,22 @@ void add_debug_info(std::shared_ptr<DwarfGenInfo> info,
   }
 
   // Insert line number info, in address order. (Must be done separately since libdwarf does not
-  // sort for us.)
+  // sort for us). Also create a list of mode16 address ranges (kept empty when not relevant).
   if (lines.size()) {
+    ea_t mode16_start = BADADDR;
     for (const auto &line: lines) {
-      if (dwarf_add_line_entry(dbg, file_index, line.first, line.second.nr, 0,
-                               line.second.statement, false, &err) != DW_DLV_OK) {
+      ea_t addr = line.first;
+      const line_info &linfo = line.second;
+      Dwarf_Unsigned isa = get_line_isa(info, linfo);
+      if (dwarf_add_line_entry_c(dbg, file_index, addr, linfo.nr, 0, linfo.statement, 0, 0, 0,
+                                 isa, 0, &err) != DW_DLV_OK) {
         dwarfexport_error("dwarf_add_line_entry failed: ", dwarf_errmsg(err));
+      }
+      if (mode16_start == BADADDR && isa == DW_ISA_ARM_thumb) {
+        mode16_start = addr;
+      } else if (mode16_start != BADADDR && isa != DW_ISA_ARM_thumb) {
+        mode16_addrs.emplace_back(mode16_start, addr);
+        mode16_start = BADADDR;
       }
     }
 
@@ -889,11 +928,12 @@ bool idaapi run(size_t) {
       dwarfexport_log("Setting up DWARF object");
       auto info = generate_dwarf_object(options);
 
+      mode16_addrs_t mode16_addrs;
       dwarfexport_log("Adding DWARF debug information");
-      add_debug_info(info, sourcefile, options);
+      add_debug_info(info, sourcefile, options, mode16_addrs);
 
       dwarfexport_log("Writing out DWARF file to disk");
-      write_dwarf_file(info, options);
+      write_dwarf_file(info, options, mode16_addrs);
 
       dwarfexport_log("All done");
       msg("dwarfexport: Done\n");

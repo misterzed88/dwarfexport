@@ -401,3 +401,22 @@ Dwarf_P_Expr disassembler_stack_lvar_location(Dwarf_P_Debug dbg, func_t *func,
 
   return loc_expr;
 }
+
+Proc get_processor()
+{
+  switch (ph.id) {
+  case PLFM_386:    return Proc::X86;
+  case PLFM_ARM:    return Proc::ARM;
+  default:          return (Proc) -1;
+  }
+}
+
+Mode get_processor_mode()
+{
+  return (inf_is_64bit() ? Mode::BIT64 : Mode::BIT32);
+}
+
+bool get_processor_mode16(ea_t addr)
+{
+    return ph.get_code16_mode(addr);
+}

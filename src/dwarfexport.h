@@ -46,11 +46,17 @@ inline void dwarfexport_log_impl(Arg arg, Args... args) {
 #define dwarfexport_log(...) if (logger.is_open()) dwarfexport_log_impl(__VA_ARGS__)
 #define hex(addr)            std::hex, (addr), std::dec
 
+enum class Proc { X86, ARM };
 enum class Mode { BIT32, BIT64 };
+
+Proc get_processor();
+Mode get_processor_mode();
+bool get_processor_mode16(ea_t addr);
 
 struct DwarfGenInfo {
   Elf *elf = nullptr;
-  Mode mode = (sizeof(ea_t) == 4) ? (Mode::BIT32) : (Mode::BIT64);
+  Proc proc = get_processor();
+  Mode mode = get_processor_mode();
   Dwarf_P_Debug dbg;
   Dwarf_Error err = 0;
 };
@@ -83,9 +89,12 @@ struct Options {
   Options(unsigned short options) : export_options{options} {}
 };
 
+// A sorted list of mode16 address ranges
+using mode16_addrs_t = std::vector<range_t>;
+
 std::shared_ptr<DwarfGenInfo> generate_dwarf_object(const Options &options);
 void write_dwarf_file(std::shared_ptr<DwarfGenInfo> info,
-                      const Options &options);
+                      const Options &options, mode16_addrs_t &mode16_addrs);
 int translate_register_num(int ida_reg_num);
 Dwarf_P_Expr decompiler_stack_lvar_location(Dwarf_P_Debug dbg, cfuncptr_t cfunc,
                                             const lvar_t &var);

@@ -45,7 +45,7 @@ static int add_section_header_string(Elf *elf, const char *name) {
   shdr.sh_size = data->d_size;
 
   if (!gelf_update_shdr(strscn, &shdr)) {
-    dwarfexport_error("Unable to gelf_update_shdr()", elf_errmsg(-1));
+    dwarfexport_error("gelf_update_shdr() failed: ", elf_errmsg(-1));
   }
 
   return ret;
@@ -115,9 +115,31 @@ std::shared_ptr<DwarfGenInfo> generate_dwarf_object(const Options &options) {
 
   // We don't use the dwarf relocations, so it probably doesn't matter what
   // we put here
-  const char *isa_name = (info->mode == Mode::BIT32) ? "x86" : "x86_64";
+  const char *isa_name;
+  bool uses_line_isa = false;
+  switch (info->proc) {
+  case Proc::X86:
+    isa_name = (info->mode == Mode::BIT32) ? "x86" : "x86_64";
+    break;
+  case Proc::ARM:
+    if (info->mode == Mode::BIT32) {
+      isa_name = "arm";
+      // Enable the line below in the future in case there is tool support for ISA entries.
+      // Current lldb versions ignore this info, relying only on symtab entries. (gdb support
+      // was not checked).
+      // uses_line_isa = true;
+    } else {
+        isa_name = "arm64";
+    }
+    break;
+  default:
+    isa_name = "unsupported";
+    break;
+  }
 
-  const char *dwarf_version = "V2";
+  // Additional setup needed when we provide ISA info with debug lines, setting version not enough
+  const char *dwarf_version = (uses_line_isa ? "V3" : "V2");
+  const char *extra = (uses_line_isa ? "opcode_base=13" : 0);
   int endian = (inf_is_be()) ? DW_DLC_TARGET_BIGENDIAN : DW_DLC_TARGET_LITTLEENDIAN;
   Dwarf_Ptr errarg = 0;
 
@@ -130,7 +152,7 @@ std::shared_ptr<DwarfGenInfo> generate_dwarf_object(const Options &options) {
   int res = dwarf_producer_init(DW_DLC_WRITE | DW_DLC_SYMBOLIC_RELOCATIONS |
                                     ptrsizeflagbit | offsetsizeflagbit | endian,
                                 callback, 0, errarg, (void *)info.get(),
-                                isa_name, dwarf_version, 0, &info->dbg, &err);
+                                isa_name, dwarf_version, extra, &info->dbg, &err);
   if (res != DW_DLV_OK) {
     dwarfexport_error("dwarf_producer_init failed: ", dwarf_errmsg(err));
   }
@@ -276,10 +298,160 @@ static void log_elf(Elf *elf) {
   }
 }
 
+
+// Find existing symtab section or create new one if not present
+static Elf_Scn *get_symtab_section(Elf *elf) {
+  GElf_Shdr shdr;
+  Elf_Scn *scn = NULL;
+
+  // Find index of section header string table section
+  size_t shstrndx = 0;
+  if (elf_getshdrstrndx(elf, &shstrndx) == -1)
+    dwarfexport_error("elf_getshdrstrndx() failed: ", elf_errmsg(-1));
+
+  // Check for existing symtab section
+  while ((scn = elf_nextscn(elf, scn))) {
+    if (!gelf_getshdr(scn, &shdr))
+      dwarfexport_error("gelf_getshdr() failed: ", elf_errmsg(-1));
+    if (shdr.sh_type == SHT_SYMTAB)
+        break;
+  }
+
+  // Existing symtab section present, use it
+  if (scn) {
+    // Current implementation assumes section header table used for symbol strings
+    if (shdr.sh_link != shstrndx)
+      dwarfexport_error("unsupported symtab string section: ", shdr.sh_link);
+    return scn;
+  }
+
+  // Create new symtab section, left empty without initial NULL symbol
+  int elfcls = gelf_getclass(elf);
+  if (elfcls == ELFCLASSNONE)
+    dwarfexport_error("unknown ELF class");
+
+  if (!(scn = elf_newscn(elf)))
+    dwarfexport_error("elf_newscn() failed");
+
+  memset(&shdr, 0, sizeof(shdr));
+  shdr.sh_name = add_section_header_string(elf, ".symtab");
+  shdr.sh_type = SHT_SYMTAB;
+  shdr.sh_link = shstrndx;
+  shdr.sh_info = 1;     // Max number of local symbols + 1 = 0 + 1
+  if (elfcls == ELFCLASS32) {
+    shdr.sh_addralign = sizeof(GElf_Word);
+    shdr.sh_entsize = sizeof(Elf32_Sym);
+  } else {
+    shdr.sh_addralign = sizeof(GElf_Xword);
+    shdr.sh_entsize = sizeof(Elf64_Sym);
+  }
+  // Remaining fields left at defaults (0). Note that size and offset updated later
+
+  if (!gelf_update_shdr(scn, &shdr))
+    dwarfexport_error("gelf_update_shdr() failed: ", elf_errmsg(-1));
+
+  return scn;
+}
+
+static void add_symbol(Elf *elf, Elf_Data *data, int &ndx, const char *name, GElf_Addr value,
+                       GElf_Xword size = 0, int bind = STB_LOCAL, int type = STT_NOTYPE,
+                       GElf_Half shndx = SHN_UNDEF) {
+   GElf_Sym sym = { 0, };
+
+   sym.st_name = (name ? add_section_header_string(elf, name) : STN_UNDEF);
+   sym.st_value = value;
+   sym.st_size = size;
+   sym.st_info = GELF_ST_INFO(bind, type);
+   sym.st_shndx = shndx;
+
+   if (!gelf_update_sym(data, ndx++, &sym))
+    dwarfexport_error("gelf_update_sym() failed: ", elf_errmsg(-1));
+}
+
+// LLDB requires special symbol entries for Thumb functions, otherwise it defaults to ARM mode,
+// leading to wrong disassembly and incorrect breakpoints. Add these symbols. (For LLDB Thumb mode
+// detection details, see for example Platform::GetSoftwareBreakpointTrapOpcode in the source,
+// where AddressClass::eCodeAlternateISA address type is used for Thumb addresses).
+static void add_mode16_symbols(Elf *elf, mode16_addrs_t &mode16_addrs) {
+  Elf_Scn *scn = get_symtab_section(elf);
+
+  GElf_Shdr shdr;
+  if (!gelf_getshdr(scn, &shdr))
+    dwarfexport_error("gelf_getshdr() failed: ", elf_errmsg(-1));
+
+  off_t curoff = get_current_data_offset(scn);
+  Elf_Data *data = elf_newdata(scn);
+  if (!data)
+    dwarfexport_error("elf_newdata() failed: ", elf_errmsg(-1));
+
+  size_t entsize = shdr.sh_entsize;
+  int symndx = 0;
+
+  // Allocate buffer for new data, making space for NULL entry when symtab data is empty
+  size_t bufsize = ((shdr.sh_size ? 0 : 1) + mode16_addrs.size()) * entsize;
+  char *buf = new char[bufsize];
+  data->d_buf = buf;
+  data->d_size = bufsize;
+  data->d_type = ELF_T_SYM;
+  data->d_off = curoff;
+
+  // Prepend NULL symbol entry if needed
+  if (!shdr.sh_size)
+    add_symbol(elf, data, symndx, NULL, 0);
+
+  size_t ssndx = SHN_UNDEF;
+  range_t ssrange;
+  bool errors = false;
+
+  // Append one symbol entry for each range
+  for (const auto &addr: mode16_addrs) {
+    // Find section for this address range
+    if (ssndx == SHN_UNDEF || !ssrange.contains(addr)) {
+        Elf_Scn *sscn = NULL;
+        GElf_Shdr sshdr;
+        while ((sscn = elf_nextscn(elf, sscn))) {
+          if (!gelf_getshdr(sscn, &sshdr))
+            dwarfexport_error("gelf_getshdr() failed: ", elf_errmsg(-1));
+          ssrange = range_t(sshdr.sh_addr, sshdr.sh_addr + sshdr.sh_size);
+          ssndx = elf_ndxscn(sscn);
+          if (ssrange.contains(addr))
+            break;
+        }
+        if (!sscn) {
+          dwarfexport_log("Failed to find section for Thumb range: 0x", hex(addr.start_ea), "-0x",
+                          hex(addr.end_ea));
+          errors = true;
+          continue;
+        }
+    }
+
+    // Add symbol entry for this address range with Thumb bit set in the start address
+    std::string symname = std::string("DwarfThumbRange") + std::to_string(symndx);
+    add_symbol(elf, data, symndx, symname.c_str(), addr.start_ea | 1, addr.size(), STB_GLOBAL,
+               STT_FUNC, ssndx);
+  }
+
+  if (errors)
+    msg("Failed to add symbols for some Thumb ranges\n");
+
+  // Update section size and offset. Move section to end of last section, leaving old one as hole.
+  Elf_Scn *last_scn = get_last_section(elf);
+  GElf_Shdr last_shdr;
+  if (!gelf_getshdr(last_scn, &last_shdr))
+    dwarfexport_error("elf_getshdr() failed: ", elf_errmsg(-1));
+
+  shdr.sh_offset = last_shdr.sh_offset + last_shdr.sh_size;
+  shdr.sh_size += bufsize;
+
+  if (!gelf_update_shdr(scn, &shdr))
+    dwarfexport_error("gelf_update_shdr() failed: ", elf_errmsg(-1));
+}
+
 static void generate_copy_with_dbg_info(std::shared_ptr<DwarfGenInfo> info,
                                         const std::string &outdir,
                                         const std::string &src,
-                                        const std::string &dst) {
+                                        const std::string &dst,
+                                        mode16_addrs_t &mode16_addrs) {
   int fd_in = -1, fd_out = -1;
   Elf *elf_in = 0, *elf_out = 0;
 
@@ -384,6 +556,13 @@ static void generate_copy_with_dbg_info(std::shared_ptr<DwarfGenInfo> info,
   dwarfexport_log("After copying the original sections:");
   log_elf(elf_out);
 
+  if (!mode16_addrs.empty()) {
+    add_mode16_symbols(elf_out, mode16_addrs);
+
+    dwarfexport_log("After adding mode16 symbols:");
+    log_elf(elf_out);
+  }
+
   add_debug_section_data(info);
 
   dwarfexport_log("After adding the debug sections:");
@@ -479,9 +658,10 @@ void generate_detached_dbg_info(std::shared_ptr<DwarfGenInfo> info,
 }
 
 void write_dwarf_file(std::shared_ptr<DwarfGenInfo> info,
-                      const Options &options) {
+                      const Options &options, mode16_addrs_t &mode16_addrs) {
   if (options.attach_debug_info()) {
-    generate_copy_with_dbg_info(info, options.outdir, options.filename, options.dbg_filename());
+    generate_copy_with_dbg_info(info, options.outdir, options.filename, options.dbg_filename(),
+                                mode16_addrs);
   } else {
     generate_detached_dbg_info(info, options.outdir);
   }
